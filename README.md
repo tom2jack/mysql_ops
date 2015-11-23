@@ -1,2 +1,5 @@
 # mysql_ops
-MySQL运维
+
+my.cnf MySQL配置文件
+
+mysql_install.sh MySQL自动安装脚本
