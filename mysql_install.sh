@@ -1,6 +1,7 @@
 #!/bin/zsh
 
 #此脚本需要su到root下安装
+#修改此脚本的用户/用户组权限为root:root，文件属性为770
 #安装依赖软件包
 apt-get -y install libaio1
 
