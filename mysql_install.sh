@@ -10,11 +10,6 @@ apt-get -y install libaio1
 
 mysql_install_dir=/usr/local
 
-bin_dir=$mysql_install_dir/mysql/bin
-echo "PATH=$bin_dir:$PATH" >>/etc/profile
-echo "export PATH" >>/etc/profile
-. /etc/profile
-
 #创建用户组和用户
 echo "\nmysql group and user check\n"
 
@@ -45,6 +40,17 @@ cd `dirname $0`
 cp $(pwd)/my.cnf /etc/my.cnf
 
 mysql_dir=$(echo $1 | sed "s/.tar.gz//g")
+#得到MySQL版本
+version=$(echo $mysql_dir | cut -d '-' -f 2 | cut -d '.' -f 1,2)
+
+mysql_link=mysql_5_6
+if [ $version = "5.7" ]
+then
+    mysql_link=mysql_5_7
+fi
+
+bin_dir=$mysql_install_dir/$mysql_link/bin
+
 #/usr/local/mysql-5.x.x-linux-glibc2.5-x86_64目录存在则不解压
 if test -d $mysql_install_dir/$mysql_dir
 then
@@ -62,7 +68,14 @@ else
 
     #创建mysql软链接
     echo "create link...\n"
-    ln -s $mysql_dir mysql
+    ln -s $mysql_dir $mysql_link
+    
+    #/etc/profile中包含了对bash的操作(不需要)
+    rm /etc/profile
+    echo "PATH=$bin_dir:$PATH" >>/etc/profile
+    echo "export PATH" >>/etc/profile
+    #这是在子shell中执行，需要在父shell中再执行一次
+    . /etc/profile
 fi
 
 #创建datadir
@@ -84,16 +97,16 @@ fi
 chown -R mysql:mysql /data/mysql
 
 #对每个实例进行初始化
-cd $mysql_install_dir/mysql
+cd $mysql_install_dir/$mysql_link
 chown -R mysql:mysql .
 
-#得到MySQL版本
-version=$(echo $mysql_dir | cut -d '-' -f 2 | cut -d '.' -f 1,2)
-
 function create_mysql_files_dir {
-    mkdir mysql-files
-    chmod 770 mysql-files
-    chown -R mysql:mysql mysql-files
+    if [ $version = "5.7" ]
+    then
+        mkdir mysql-files
+        chmod 770 mysql-files
+        chown -R mysql:mysql mysql-files
+    fi
 }
 
 create_mysql_files_dir
@@ -122,10 +135,19 @@ function single_init_mysql_5_7 {
 
 function multi_init_mysql_5_6 {
     echo "multi init 5.6...\n"
+
+    for dir_name in data{1..4}
+    do
+        datadir=/data/mysql/$dir_name
+        $bin_dir/../scripts/mysql_install_db --user=mysql --datadir=$datadir
+        sleep 2
+    done
 }
 
 function single_init_mysql_5_6 {
     echo "single init 5.6...\n"
+
+    $bin_dir/../scripts/mysql_install_db --user=mysql --datadir=/data/mysql
 }
 
 #初始化
@@ -147,7 +169,10 @@ else
 fi
 
 chown -R root .
-chown -R mysql:mysql mysql-files
+if [ $version = "5.7" ]
+then
+    chown -R mysql:mysql mysql-files
+fi
 
 if [ $version = "5.7" ] && [ $2 = "multi" ]
 then
@@ -161,22 +186,22 @@ then
     done
 fi
 
-
 ctrl_script=mysql.server
 if [ $2 = "multi" ]
 then
     ctrl_script=mysqld_multi.server
 fi
 
-cp $mysql_install_dir/mysql/support-files/$ctrl_script /etc/init.d/$ctrl_script
-
+#5.6中需要将basedir添加到my.cnf，否则会报错找不到my_print_defaults
+cp $mysql_install_dir/$mysql_link/support-files/$ctrl_script /etc/init.d/$ctrl_script
 
 #启动实例
 if [ $2 = "multi" ]
 then
     $bin_dir/mysqld_multi start
 else
-    $bin_dir/mysqld_safe --user=mysql & 
+    #见mysqld_safe --help
+    $bin_dir/mysqld_safe --user=mysql --ledir=$mysql_install_dir/$mysql_link/bin & 
 fi
 
 #睡眠2s，等待mysqld启动完毕，否则会报告mysql无法通过/tmp/mysql.sock连接到mysqld
@@ -194,7 +219,8 @@ then
         do
             tmp_password=$(cat /data/mysql/data$num/error.log | grep "A temporary password is generated for" | awk -F' ' '{print $NF}')
             echo $tmp_password
-            $bin_dir/mysql --connect-expired-password -uroot -p$tmp_password -S /tmp/mysql.sock$num -e"set password='$password';"
+
+            $bin_dir/mysql --connect-expired-password -uroot -p$tmp_password -S /tmp/mysql.sock$num -e"set password='$password';create user 'multi_admin'@'localhost' identified by 'Syl19880121';grant shutdown on *.* to 'multi_admin'@'localhost';"
         done
     else
         tmp_password=$(cat /data/mysql/error.log | grep "A temporary password is generated for" | awk -F' ' '{print $NF}')
@@ -202,6 +228,14 @@ then
 
         #注意-e中要使用单引号
         $bin_dir/mysql --connect-expired-password -uroot -p$tmp_password -e"set password='$password';"
+    fi
+else
+    if [ $2 = "multi" ]
+    then
+        for num in {1..4}
+        do
+            $bin_dir/mysql -uroot -S /tmp/mysql.sock$num -e"create user 'multi_admin'@'localhost' identified by 'Syl19880121';grant shutdown on *.* to 'multi_admin'@'localhost'";
+        done
     fi
 fi
 
